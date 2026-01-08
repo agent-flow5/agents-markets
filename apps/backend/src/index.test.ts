@@ -65,6 +65,13 @@ describe('workers backend', () => {
     await expect(res.json()).resolves.toEqual({ ok: true })
   })
 
+  test('GET /api/health returns ok', async () => {
+    const { worker } = await setupWorker()
+    const res = await worker.fetch(new Request('http://localhost/api/health'), {})
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toEqual({ ok: true })
+  })
+
   test('OPTIONS returns 204 and CORS headers', async () => {
     const { worker } = await setupWorker()
     const req = new Request('http://localhost/chat', {
@@ -79,6 +86,18 @@ describe('workers backend', () => {
   test('POST /chat rejects invalid JSON', async () => {
     const { worker } = await setupWorker()
     const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+    })
+    const res = await worker.fetch(req, {})
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body' })
+  })
+
+  test('POST /api/chat rejects invalid JSON', async () => {
+    const { worker } = await setupWorker()
+    const req = new Request('http://localhost/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{',

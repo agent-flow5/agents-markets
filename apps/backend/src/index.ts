@@ -122,16 +122,21 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     const corsHeaders = getCorsHeaders(request, env)
+    const pathname = url.pathname.startsWith('/api/')
+      ? url.pathname.slice('/api'.length)
+      : url.pathname === '/api'
+        ? '/'
+        : url.pathname
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders })
     }
 
-    if (url.pathname === '/health') {
+    if (pathname === '/health') {
       return jsonResponse({ ok: true }, { status: 200, headers: corsHeaders })
     }
 
-    if (url.pathname === '/chat' && request.method === 'POST') {
+    if (pathname === '/chat' && request.method === 'POST') {
       try {
         return await handleChat(request, env)
       } catch (error) {
