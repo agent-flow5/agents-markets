@@ -16,9 +16,10 @@ function App() {
   const [input, setInput] = useState('')
 
   const chat = useMemo(() => {
+    const api = (import.meta as { env?: Record<string, string> }).env?.VITE_BACKEND_CHAT_API
     return new AIChat<UIMessage>({
       transport: new DefaultChatTransport({
-        api: 'http://localhost:3000/chat',
+        api: api || 'http://localhost:3000/chat',
       }),
       messages: [],
     })
