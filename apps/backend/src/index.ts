@@ -1,30 +1,10 @@
-import { convertToModelMessages, streamText, type UIMessage } from 'ai'
-import {
-  DEFAULT_MODEL_PROVIDER,
-  getDefaultModelId,
-  getModel,
-  type Env as ModelEnv,
-  type ModelProvider,
-} from './ai/models'
+import { convertToModelMessages, streamText } from 'ai'
+import { DEMO_AGENTS, getAgentById } from './data/agents'
+import { getModel, type RegistryEnv } from './lib/ai/registry'
+import type { ChatRequestBody } from './types/chat'
 
-type Env = ModelEnv & {
+type Env = RegistryEnv & {
   CORS_ORIGIN?: string
-}
-
-type ModelConfig = {
-  provider: ModelProvider
-  modelId: string
-}
-
-type ChatRequestBody = {
-  messages: UIMessage[]
-  modelConfig?: ModelConfig
-  data?: {
-    provider?: ModelProvider
-    modelId?: string
-    systemPrompt?: string
-  }
-  systemPrompt?: string
 }
 
 function getCorsHeaders(request: Request, env: Env): Record<string, string> {
@@ -55,19 +35,10 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), { ...init, headers })
 }
 
-function validateProviderEnv(provider: ModelProvider, env: Env): string[] {
-  if (provider === 'volcengine') {
-    const missing: string[] = []
-    if (!env.VOLCENGINE_BASE_URL) missing.push('VOLCENGINE_BASE_URL')
-    if (!env.VOLCENGINE_API_KEY) missing.push('VOLCENGINE_API_KEY')
-    return missing
-  }
-
-  if (provider === 'openai') {
-    return env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY']
-  }
-
-  return []
+function normalizeTemperature(value: unknown): number | undefined {
+  if (typeof value !== 'number') return undefined
+  if (Number.isNaN(value)) return undefined
+  return Math.max(0, Math.min(2, value))
 }
 
 async function handleChat(request: Request, env: Env): Promise<Response> {
@@ -84,35 +55,32 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: 'Invalid messages' }, { status: 400, headers: corsHeaders })
   }
 
-  const provider: ModelProvider =
-    body.modelConfig?.provider ?? body.data?.provider ?? DEFAULT_MODEL_PROVIDER
-
-  const modelId = body.modelConfig?.modelId ?? body.data?.modelId ?? getDefaultModelId(provider, env)
-
-  if (!modelId) {
-    return jsonResponse({ error: 'Missing modelId' }, { status: 400, headers: corsHeaders })
+  if (typeof body.modelId === 'string' && body.modelId.trim() === '') {
+    return jsonResponse({ error: 'Invalid modelId' }, { status: 400, headers: corsHeaders })
   }
 
-  const missingEnv = validateProviderEnv(provider, env)
-  if (missingEnv.length > 0) {
-    return jsonResponse(
-      {
-        error: `Missing environment variables for provider: ${provider}`,
-        missing: missingEnv,
-        hint: '本地开发请在 apps/backend/.dev.vars 配置；部署请用 wrangler secret put。',
-      },
-      { status: 500, headers: corsHeaders },
-    )
+  const agent = body.agentId ? getAgentById(body.agentId) : !body.modelId ? DEMO_AGENTS[0] : undefined
+  if (body.agentId && !agent) {
+    return jsonResponse({ error: `Unknown agentId: ${body.agentId}` }, { status: 400, headers: corsHeaders })
   }
+  const modelId = agent?.modelId ?? body.modelId
+  const systemPrompt = agent?.systemPrompt ?? body.systemPrompt ?? '你是一个专业的后端智能体。'
+  const temperature = normalizeTemperature(agent?.temperature ?? body.temperature)
+
+  if (!modelId) return jsonResponse({ error: 'Missing modelId' }, { status: 400, headers: corsHeaders })
 
   // 转换为模型消息格式
   const modelMessages = await convertToModelMessages(body.messages.map(({ id: _id, ...rest }) => rest))
 
-  const result = await streamText({
-    model: getModel({ provider, modelId, env }),
-    messages: modelMessages,
-    system: body.data?.systemPrompt ?? body.systemPrompt ?? '你是一个专业的后端智能体。',
-  })
+  let model: ReturnType<typeof getModel>
+  try {
+    model = getModel(modelId, env)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid modelId'
+    return jsonResponse({ error: message }, { status: 400, headers: corsHeaders })
+  }
+
+  const result = await streamText({ model, messages: modelMessages, system: systemPrompt, temperature })
 
   // 转换为 UI 消息流响应
   const response = result.toUIMessageStreamResponse({

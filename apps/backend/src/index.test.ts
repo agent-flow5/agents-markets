@@ -5,10 +5,19 @@ type MockedAI = {
   convertToModelMessages: jest.Mock
 }
 
-type MockedModels = {
-  DEFAULT_MODEL_PROVIDER: 'volcengine'
-  getDefaultModelId: jest.Mock
+type MockedRegistry = {
   getModel: jest.Mock
+}
+
+type MockedAgents = {
+  getAgentById: jest.Mock
+  DEMO_AGENTS: Array<{
+    id: string
+    name: string
+    modelId: string
+    systemPrompt: string
+    temperature: number
+  }>
 }
 
 function makeUiStreamResponse(): Response {
@@ -23,7 +32,8 @@ function makeUiStreamResponse(): Response {
 
 async function setupWorker(overrides?: {
   ai?: Partial<MockedAI>
-  models?: Partial<MockedModels>
+  registry?: Partial<MockedRegistry>
+  agents?: Partial<MockedAgents>
 }) {
   const ai: MockedAI = {
     streamText: jest.fn(async () => ({
@@ -31,14 +41,26 @@ async function setupWorker(overrides?: {
     })),
     convertToModelMessages: jest.fn(async (messages: unknown) => messages),
     ...overrides?.ai,
-  } as unknown as MockedAI
+  }
 
-  const models: MockedModels = {
-    DEFAULT_MODEL_PROVIDER: 'volcengine',
-    getDefaultModelId: jest.fn(() => 'ep-test'),
+  const registry: MockedRegistry = {
     getModel: jest.fn(() => ({})),
-    ...overrides?.models,
-  } as unknown as MockedModels
+    ...overrides?.registry,
+  }
+
+  const agents: MockedAgents = {
+    getAgentById: jest.fn(() => undefined),
+    DEMO_AGENTS: [
+      {
+        id: 'code-assistant',
+        name: '代码助手',
+        modelId: 'gpt-4o',
+        systemPrompt: 'S',
+        temperature: 0.2,
+      },
+    ],
+    ...overrides?.agents,
+  }
 
   jest.resetModules()
 
@@ -47,14 +69,17 @@ async function setupWorker(overrides?: {
     convertToModelMessages: ai.convertToModelMessages,
   }))
 
-  jest.unstable_mockModule('./ai/models', () => ({
-    DEFAULT_MODEL_PROVIDER: models.DEFAULT_MODEL_PROVIDER,
-    getDefaultModelId: models.getDefaultModelId,
-    getModel: models.getModel,
+  jest.unstable_mockModule('./lib/ai/registry', () => ({
+    getModel: registry.getModel,
+  }))
+
+  jest.unstable_mockModule('./data/agents', () => ({
+    getAgentById: agents.getAgentById,
+    DEMO_AGENTS: agents.DEMO_AGENTS,
   }))
 
   const { default: worker } = await import('./index')
-  return { worker, ai, models }
+  return { worker, ai, registry, agents }
 }
 
 describe('workers backend', () => {
@@ -119,25 +144,25 @@ describe('workers backend', () => {
     await expect(res.json()).resolves.toEqual({ error: 'Invalid messages' })
   })
 
-  test('POST /chat rejects empty modelId when provided explicitly', async () => {
+  test('POST /chat rejects empty modelId', async () => {
     const { worker } = await setupWorker()
     const req = new Request('http://localhost/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
-        modelConfig: { provider: 'volcengine', modelId: '' },
+        modelId: '',
       }),
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Missing modelId' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid modelId' })
   })
 
   test('POST /chat streams UI message protocol and applies CORS', async () => {
-    const { worker, ai, models } = await setupWorker({
-      models: {
-        getDefaultModelId: jest.fn(() => 'ep-abc'),
+    const { worker, ai, registry } = await setupWorker({
+      registry: {
+        getModel: jest.fn(() => ({})),
       },
     })
 
@@ -152,7 +177,8 @@ describe('workers backend', () => {
           { id: 'u1', role: 'user', parts: [{ type: 'text', text: '你好' }] },
           { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: '...' }] },
         ],
-        data: { systemPrompt: 'SYS' },
+        modelId: 'gpt-4o',
+        systemPrompt: 'SYS',
       }),
     })
 
@@ -164,22 +190,133 @@ describe('workers backend', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('x-vercel-ai-ui-message-stream')).toBe('v1')
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
-    expect(models.getDefaultModelId).toHaveBeenCalledWith(
-      'volcengine',
-      expect.objectContaining({ CORS_ORIGIN: 'http://localhost:5173' }),
-    )
 
-    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string }
+    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
     expect(streamTextArgs.system).toBe('SYS')
-    expect(models.getModel).toHaveBeenCalledWith({
-      provider: 'volcengine',
-      modelId: 'ep-abc',
-      env: expect.objectContaining({ CORS_ORIGIN: 'http://localhost:5173' }),
-    })
+    expect(streamTextArgs.temperature).toBeUndefined()
+    expect(registry.getModel).toHaveBeenCalledWith('gpt-4o', expect.objectContaining({ CORS_ORIGIN: 'http://localhost:5173' }))
 
     const convertArgs = ai.convertToModelMessages.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(convertArgs[0]).toEqual({ role: 'user', parts: [{ type: 'text', text: '你好' }] })
     expect(convertArgs[0]).not.toHaveProperty('id')
+  })
+
+  test('POST /chat uses agent config when agentId provided', async () => {
+    const { worker, ai, registry, agents } = await setupWorker({
+      agents: {
+        getAgentById: jest.fn(() => ({
+          id: 'zh-translator',
+          name: '中文翻译官',
+          modelId: 'doubao-lite',
+          systemPrompt: 'S',
+          temperature: 0.7,
+        })),
+      },
+      registry: {
+        getModel: jest.fn(() => ({})),
+      },
+    })
+
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        agentId: 'zh-translator',
+      }),
+    })
+
+    const res = await worker.fetch(req, {
+      VOLCENGINE_BASE_URL: 'http://example.com',
+      VOLCENGINE_API_KEY: 'k',
+    })
+    expect(res.status).toBe(200)
+    expect(agents.getAgentById).toHaveBeenCalledWith('zh-translator')
+    expect(registry.getModel).toHaveBeenCalledWith('doubao-lite', expect.objectContaining({ VOLCENGINE_API_KEY: 'k' }))
+    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
+    expect(streamTextArgs.system).toBe('S')
+    expect(streamTextArgs.temperature).toBe(0.7)
+  })
+
+  test('POST /chat defaults to DEMO_AGENTS[0] when no agentId/modelId', async () => {
+    const { worker, ai, registry } = await setupWorker({
+      agents: {
+        DEMO_AGENTS: [
+          {
+            id: 'code-assistant',
+            name: '代码助手',
+            modelId: 'gpt-4o',
+            systemPrompt: 'SYS0',
+            temperature: 0.1,
+          },
+        ],
+      },
+      registry: {
+        getModel: jest.fn(() => ({})),
+      },
+    })
+
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+      }),
+    })
+
+    const res = await worker.fetch(req, {
+      OPENAI_API_KEY: 'k',
+    })
+    expect(res.status).toBe(200)
+    expect(registry.getModel).toHaveBeenCalledWith('gpt-4o', expect.objectContaining({ OPENAI_API_KEY: 'k' }))
+    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
+    expect(streamTextArgs.system).toBe('SYS0')
+    expect(streamTextArgs.temperature).toBe(0.1)
+  })
+
+  test('POST /chat rejects unknown agentId', async () => {
+    const { worker } = await setupWorker({
+      agents: {
+        getAgentById: jest.fn(() => undefined),
+      },
+    })
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        agentId: 'missing-agent',
+      }),
+    })
+    const res = await worker.fetch(req, {})
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: 'Unknown agentId: missing-agent' })
+  })
+
+  test('POST /chat rejects unknown modelId', async () => {
+    const { worker, registry } = await setupWorker({
+      registry: {
+        getModel: jest.fn(() => {
+          throw new Error('Unknown modelId: nope. Available: gpt-4o, doubao-pro-32k, doubao-lite')
+        }),
+      },
+    })
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        modelId: 'nope',
+      }),
+    })
+    const res = await worker.fetch(req, {
+      OPENAI_API_KEY: 'k',
+    })
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({
+      error: 'Unknown modelId: nope. Available: gpt-4o, doubao-pro-32k, doubao-lite',
+    })
+    expect(registry.getModel).toHaveBeenCalled()
   })
 
   test('POST /chat returns 500 with error message on model failure', async () => {
@@ -216,12 +353,11 @@ describe('workers backend', () => {
     expect(elapsed).toBeLessThan(2000)
   })
 
-  test('docs mention endpoints implemented by worker', async () => {
+  test('API.md exists and mentions /api/chat', async () => {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
-    const readmePath = path.resolve(process.cwd(), '..', '..', 'README.md')
-    const content = await fs.readFile(readmePath, 'utf8')
-    expect(content).toContain('GET /health')
-    expect(content).toContain('POST /chat')
+    const apiPath = path.resolve(process.cwd(), 'API.md')
+    const content = await fs.readFile(apiPath, 'utf8')
+    expect(content).toContain('/api/chat')
   })
 })
