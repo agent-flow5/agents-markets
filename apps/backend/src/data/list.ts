@@ -1,3 +1,5 @@
+import { DEMO_AGENTS } from "./agents";
+
 export type ProviderId = "openai" | "volcengine";
 
 export type ModelCatalogItem = {
@@ -156,3 +158,41 @@ export function getModelCatalogItem(
 ): ModelCatalogItem | undefined {
   return (MODEL_CATALOG as Record<string, ModelCatalogItem>)[modelId];
 }
+
+const list: ModelCatalogItem[] = Object.values(MODEL_CATALOG).sort(
+  (a, b) => a.id - b.id
+);
+
+const maxId = list.reduce((acc, item) => Math.max(acc, item.id), 0);
+
+const agentsList: ModelCatalogItem[] = DEMO_AGENTS.map((agent, index) => {
+  const existing = getModelCatalogItem(agent.modelId);
+  if (existing) {
+    return {
+      ...existing,
+      id: maxId + index + 1,
+      name: agent.name,
+      systemPrompt: agent.systemPrompt,
+      defaultTemperature: agent.temperature,
+    };
+  }
+
+  const provider: ProviderId =
+    agent.modelId.startsWith("gpt-") || agent.modelId.startsWith("o")
+      ? "openai"
+      : "volcengine";
+
+  return {
+    id: maxId + index + 1,
+    model: provider === "openai" ? agent.modelId : "endpoint",
+    modelId: agent.modelId,
+    name: agent.name,
+    provider,
+    displayName: agent.modelId,
+    systemPrompt: agent.systemPrompt,
+    defaultTemperature: agent.temperature,
+    supports: { streaming: true, tools: true, vision: false, json: true },
+  };
+});
+
+export const MODEL_LIST: ModelCatalogItem[] = [...list, ...agentsList];
