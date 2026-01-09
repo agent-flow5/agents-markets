@@ -26,6 +26,17 @@ beforeEach(() => {
   mockMessages = []
   mockStatus = 'ready'
   mockSendMessage.mockReset()
+  globalThis.fetch = vi.fn(async () => {
+    return new Response(
+      JSON.stringify({
+        items: [
+          { id: 1, modelId: 'gpt-4o' },
+          { id: 2, modelId: 'doubao-lite' },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }) as unknown as typeof fetch
 })
 
 describe('App', () => {
@@ -33,12 +44,16 @@ describe('App', () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await screen.findAllByText('gpt-4o')
     const input = screen.getByPlaceholderText('输入消息，支持 Markdown')
     await user.type(input, 'hello')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
-    expect(mockSendMessage).toHaveBeenCalledWith({ text: 'hello' })
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      { text: 'hello' },
+      { body: { modelId: 'gpt-4o' } },
+    )
     expect((input as HTMLInputElement).value).toBe('')
   })
 
@@ -69,4 +84,3 @@ describe('App', () => {
     expect(screen.getByText('bold')).toBeInTheDocument()
   })
 })
-

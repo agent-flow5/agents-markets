@@ -97,6 +97,24 @@ describe('workers backend', () => {
     await expect(res.json()).resolves.toEqual({ ok: true })
   })
 
+  test('GET /models returns model list', async () => {
+    const { worker } = await setupWorker()
+    const res = await worker.fetch(new Request('http://localhost/models'), {})
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { items: Array<{ id: number; modelId: string }> }
+    expect(Array.isArray(body.items)).toBe(true)
+    expect(body.items.length).toBeGreaterThan(0)
+    expect(body.items.some((i) => i.modelId === 'gpt-4o')).toBe(true)
+  })
+
+  test('GET /api/models returns model list', async () => {
+    const { worker } = await setupWorker()
+    const res = await worker.fetch(new Request('http://localhost/api/models'), {})
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { items: Array<{ id: number; modelId: string }> }
+    expect(body.items.some((i) => i.modelId === 'gpt-4o')).toBe(true)
+  })
+
   test('OPTIONS returns 204 and CORS headers', async () => {
     const { worker } = await setupWorker()
     const req = new Request('http://localhost/chat', {

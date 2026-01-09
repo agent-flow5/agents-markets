@@ -1,10 +1,9 @@
-import type { RegistryModelId } from "../lib/ai/registry";
 import { CODE_ASSISTANT_PROMPT, ZH_TRANSLATOR_PROMPT } from "../prompts/system";
 
 export type AgentConfig = {
   id: string;
   name: string;
-  modelId: RegistryModelId;
+  modelId: string;
   systemPrompt: string;
   temperature: number;
 };
