@@ -8,7 +8,7 @@
 
 本地（wrangler dev）：
 
-- `http://localhost:3000/api`
+- `http://localhost:3300/api`
 
 线上（当前部署）：
 

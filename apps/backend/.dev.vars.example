@@ -30,8 +30,8 @@ OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx
 
 
 # ====================================================================================================
-# 后端服务（Cloudflare Workers）运行配置：监听端口（默认 3000
-BACKEND_PORT=3000
+# 后端服务（Cloudflare Workers）运行配置：监听端口（默认 3300
+BACKEND_PORT=3300
 
 DATABASE_URL=file:./mastra.db
 

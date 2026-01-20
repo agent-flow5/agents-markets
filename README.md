@@ -8,7 +8,7 @@
 ## 目录结构
 
 - [apps/web](file:///Users/ashy/Documents/code/agents-market/apps/web)：React + Vite 前端（默认 `http://localhost:5173`）
-- [apps/backend](file:///Users/ashy/Documents/code/agents-market/apps/backend)：Cloudflare Workers 后端（本地默认 `http://localhost:3000`）
+- [apps/backend](file:///Users/ashy/Documents/code/agents-market/apps/backend)：Cloudflare Workers 后端（本地默认 `http://localhost:3300`）
 
 ## 环境变量
 
@@ -33,7 +33,7 @@
   - `CORS_ORIGIN`（默认 `http://localhost:5173`）
 
 - 前端配置：
-  - `VITE_BACKEND_CHAT_API`（可选，前端调用地址覆盖；不配则默认 `http://localhost:3000/chat`）
+  - `VITE_BACKEND_CHAT_API`（可选，前端调用地址覆盖；不配则默认 `http://localhost:3300/chat`）
 
 ## 启动
 
@@ -43,7 +43,7 @@
 npm install
 ```
 
-启动后端（Workers，本地端口 3000）：
+启动后端（Workers，本地端口 3300）：
 
 ```bash
 npm run dev:backend
@@ -71,7 +71,7 @@ curl http://localhost:3000/health
 
 ### POST /chat
 
-后端接口：`http://localhost:3000/chat`
+后端接口：`http://localhost:3300/chat`
 
 前端通过 `@ai-sdk/react` 的 `DefaultChatTransport` 发送 UIMessage 数组，后端会：
 
@@ -104,7 +104,7 @@ curl 示例：
 curl -N \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"id":"1","role":"user","parts":[{"type":"text","text":"你好"}]}]}' \
-  http://localhost:3000/chat
+  http://localhost:3300/chat
 ```
 
 返回：
