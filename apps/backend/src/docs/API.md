@@ -114,13 +114,108 @@ export type AgentListResponseBody = {
 
 ### 重要规则
 
-- `agentId` 的取值来自 `items[].id`，目前实现里 `id === modelId`。
-- 调用 `/api/chat` 时，传 `agentId` 会优先使用该 agent 的 `modelId/systemPrompt/temperature`。
+- `modelId` 的取值来自 `items[].modelId`（当前实现里 `id === modelId`）。
+- 调用 `/api/chat` 时，传 `modelId` 会匹配该 agent 的默认 `systemPrompt/temperature`（可被请求体覆盖）。
 
 ### curl
 
 ```bash
 curl -sS https://market-api.singulay.online/api/agents | head -n 50
+```
+
+## POST /api/agents
+
+用途：创建一个自定义 Agent（指定 modelId + 自定义 systemPrompt/temperature），用于后续 /api/chat 调用。
+
+### Request
+
+- Method: `POST`
+- Path: `/api/agents`（也可用 `/agents`）
+- Headers: `Content-Type: application/json`
+
+入参类型：
+
+```ts
+export type CreateAgentRequestBody = {
+  name: string
+  modelId: string
+  systemPrompt: string
+  temperature?: number
+}
+```
+
+### Response
+
+- `201 application/json`
+
+返回体类型与 GET /api/agents 的单个条目一致：
+
+```ts
+export type CreateAgentResponseBody = AgentListItem
+```
+
+### 常见错误与状态码
+
+- `400 Invalid JSON body`：请求体不是合法 JSON
+- `400 Invalid name`：name 为空或全是空白
+- `400 Invalid modelId`：modelId 为空或全是空白
+- `400 Unknown modelId`：modelId 不在后端支持列表中
+- `400 Invalid systemPrompt`：systemPrompt 为空或全是空白
+
+### curl
+
+```bash
+curl -sS \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"自定义助手","modelId":"gpt-4o","systemPrompt":"你是一个专业助手","temperature":0.5}' \
+  https://market-api.singulay.online/api/agents
+```
+
+## GET /api/models
+
+用途：获取“模型列表”（modelId + 能力 + 推荐用途 + 默认 Agent 配置），用于前端创建 Agent 时做模型选择与提示。
+
+### Request
+
+- Method: `GET`
+- Path: `/api/models`（也可用 `/models`）
+
+### Response
+
+- `200 application/json`
+
+```ts
+export type ModelCapabilities = {
+  streaming: boolean
+  tools: boolean
+  vision: boolean
+  json: boolean
+}
+
+export type ModelListItem = {
+  id: number
+  modelId: string
+  provider: 'openai' | 'volcengine'
+  displayName: string
+  summary: string
+  recommendedFor: readonly string[]
+  capabilities: ModelCapabilities
+  defaultAgent: {
+    name: string
+    systemPrompt: string
+    temperature: number
+  }
+}
+
+export type ModelListResponseBody = {
+  items: readonly ModelListItem[]
+}
+```
+
+### curl
+
+```bash
+curl -sS https://market-api.singulay.online/api/models | head -n 80
 ```
 
 ## GET /api/healthcheck
@@ -195,7 +290,6 @@ import type { UIMessage } from 'ai'
 
 export type ChatRequestBody = {
   messages: UIMessage[]
-  agentId?: string
   modelId?: string
   systemPrompt?: string
   temperature?: number
@@ -205,9 +299,8 @@ export type ChatRequestBody = {
 字段语义与优先级：
 
 - `messages`：必填。UIMessage 数组。后端只校验它是数组；但随后会被 AI SDK 解析，因此请使用 `ai` 包的 UIMessage 结构。
-- `agentId`：可选。优先使用该 agent 的配置（`modelId/systemPrompt/temperature`）。
-- `modelId`：可选。当未传 `agentId` 且未传 `modelId` 时，后端会默认选用 `AGENT_LIST[0]`（也就是后端内置列表的第一个 agent）。
-- `systemPrompt`：可选。若传入则覆盖 agent 的默认 systemPrompt；若两者都没有，则默认 `"你是一个专业的通用智能体。"`。
+- `modelId`：可选。不传则默认选用 `AGENT_LIST[0]`（也就是后端内置列表的第一个 agent）。传了会尝试在 agent 列表中匹配默认 `systemPrompt/temperature`。
+- `systemPrompt`：可选。若传入则覆盖默认 systemPrompt；若两者都没有，则默认 `"你是一个专业的通用智能体。"`。
 - `temperature`：可选。有效范围 `0..2`，会被 clamp；非数字会被忽略（当作未传）。
 
 特殊行为：
@@ -235,8 +328,7 @@ export type ChatRequestBody = {
 - `400 Invalid JSON body`：请求体不是合法 JSON
 - `400 Invalid messages`：`messages` 不是数组
 - `400 Invalid modelId`：`modelId` 是空字符串（例如 `""` 或 `"   "`）
-- `400 Missing modelId`：既没有 `agentId`，也没有 `modelId`，同时后端无法取默认 agent（理论上不会发生，除非内置 agent 列表为空）
-- `400 Unknown agentId: ...`：传入了不存在的 `agentId`
+- `400 Missing modelId`：没有 `modelId`，同时后端无法取默认 agent（理论上不会发生，除非内置 agent 列表为空）
 - `400 Unknown modelId: ...`：`modelId` 不在后端注册表中（错误信息会包含可用列表）
 - `404 Not Found`：路径不存在，或使用了不支持的方法（例如 GET /api/chat）
 - `500 ...`：调用模型/Provider 发生异常（由 Worker 统一捕获返回）
@@ -275,7 +367,7 @@ const firstAgent = agents.items[0]
 
 const res = await api.chat({
   messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '你好' }] }],
-  agentId: firstAgent.id,
+  modelId: firstAgent.modelId,
 })
 
 if (!res.ok) {

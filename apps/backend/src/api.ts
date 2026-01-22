@@ -4,8 +4,8 @@ import {
   createUIMessageStreamResponse,
   streamText,
 } from "ai";
-import { AGENT_LIST, getAgentById } from "./data/agents";
-import { MODEL_LIST } from "./data/list";
+import { createAgent, listAgents } from "./data/agents";
+import { MODEL_LIST, modelList } from "./data/list";
 import { getModel, type RegistryEnv } from "./lib/ai/registry";
 import { checkProviderConfiguration } from "./lib/ai/providers";
 import type { ChatRequestBody } from "./types/chat";
@@ -31,6 +31,21 @@ export type AgentListItem = {
 export type AgentListResponseBody = {
   items: AgentListItem[];
 };
+
+export type ModelListItem = (typeof modelList)[number];
+
+export type ModelListResponseBody = {
+  items: readonly ModelListItem[];
+};
+
+export type CreateAgentRequestBody = {
+  name: string;
+  modelId: string;
+  systemPrompt: string;
+  temperature?: number;
+};
+
+export type CreateAgentResponseBody = AgentListItem;
 
 export function getCorsHeaders(
   request: Request,
@@ -76,7 +91,7 @@ export async function handleAgents(
 ): Promise<Response> {
   const corsHeaders = getCorsHeaders(request, env);
 
-  const items: AgentListItem[] = AGENT_LIST.map((a) => ({
+  const items: AgentListItem[] = listAgents().map((a) => ({
     id: a.id,
     modelId: a.modelId,
     name: a.name,
@@ -86,6 +101,53 @@ export async function handleAgents(
 
   const payload: AgentListResponseBody = { items };
   return jsonResponse(payload, { status: 200, headers: corsHeaders });
+}
+
+export async function handleModels(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+  const payload: ModelListResponseBody = { items: modelList };
+  return jsonResponse(payload, { status: 200, headers: corsHeaders });
+}
+
+export async function handleCreateAgent(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const corsHeaders = getCorsHeaders(request, env);
+
+  let body: CreateAgentRequestBody | undefined;
+  try {
+    body = (await request.json()) as CreateAgentRequestBody;
+  } catch {
+    return jsonResponse(
+      { error: "Invalid JSON body，请求体必须是 JSON 格式" },
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
+  try {
+    const created = createAgent({
+      name: body.name,
+      modelId: body.modelId,
+      systemPrompt: body.systemPrompt,
+      temperature: body.temperature,
+    });
+
+    const payload: CreateAgentResponseBody = {
+      id: created.id,
+      name: created.name,
+      modelId: created.modelId,
+      systemPrompt: created.systemPrompt,
+      temperature: created.temperature,
+    };
+    return jsonResponse(payload, { status: 201, headers: corsHeaders });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid request，检查请求体是否正确";
+    return jsonResponse({ error: message }, { status: 400, headers: corsHeaders });
+  }
 }
 
 export async function handleHealthcheck(
@@ -123,7 +185,7 @@ export async function handleHealthcheck(
 
     return jsonResponse(payload, { status: 200, headers: corsHeaders });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Healthcheck failed";
+    const message = error instanceof Error ? error.message : "Healthcheck failed，检查配置是否正确";
     return jsonResponse(
       {
         status: "error" as const,
@@ -150,49 +212,45 @@ export async function handleChat(
     body = (await request.json()) as ChatRequestBody;
   } catch {
     return jsonResponse(
-      { error: "Invalid JSON body" },
+      { error: "Invalid JSON body，请求体必须是 JSON 格式" },
       { status: 400, headers: corsHeaders }
     );
   }
 
   if (!Array.isArray(body.messages)) {
     return jsonResponse(
-      { error: "Invalid messages" },
+      { error: "Invalid messages，messages 必须是数组" },
       { status: 400, headers: corsHeaders }
     );
   }
 
-  if (typeof body.modelId === "string" && body.modelId.trim() === "") {
+  if (body.modelId !== undefined) {
+    if (typeof body.modelId !== "string" || body.modelId.trim() === "") {
+      return jsonResponse(
+        { error: "Invalid modelId，modelId 不能为空" },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+  }
+
+  const modelId = (body.modelId ?? "doubao-pro-32k").trim();
+
+  if (typeof body.systemPrompt !== "string" || body.systemPrompt.trim() === "") {
     return jsonResponse(
-      { error: "Invalid modelId" },
+      { error: "Invalid systemPrompt，systemPrompt 不能为空" },
       { status: 400, headers: corsHeaders }
     );
   }
 
-  const agent = body.agentId
-    ? getAgentById(body.agentId)
-    : !body.modelId
-    ? AGENT_LIST[0]
-    : undefined;
-  if (body.agentId && !agent) {
+  const temperature = normalizeTemperature(body.temperature ?? 0.3);
+  if (temperature === undefined) {
     return jsonResponse(
-      { error: `Unknown agentId: ${body.agentId}` },
+      { error: "Invalid temperature，temperature 必须是 0 到 2 之间的数字" },
       { status: 400, headers: corsHeaders }
     );
   }
 
-  const modelId = agent?.modelId ?? body.modelId;
-  const systemPrompt =
-    agent?.systemPrompt ?? body.systemPrompt ?? "你是一个专业的通用智能体。";
-  const temperature = normalizeTemperature(
-    agent?.temperature ?? body.temperature
-  );
-
-  if (!modelId)
-    return jsonResponse(
-      { error: "Missing modelId" },
-      { status: 400, headers: corsHeaders }
-    );
+  const systemPrompt = body.systemPrompt.trim();
 
   if (modelId.startsWith("doubao-seedream-")) {
     const stream = createUIMessageStream({
@@ -234,7 +292,7 @@ export async function handleChat(
   try {
     model = getModel(modelId, env);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid modelId";
+    const message = error instanceof Error ? error.message : "Invalid modelId，modelId 不存在";
     return jsonResponse(
       { error: message },
       { status: 400, headers: corsHeaders }

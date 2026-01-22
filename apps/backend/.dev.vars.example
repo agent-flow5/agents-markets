@@ -1,5 +1,18 @@
-# 火山引擎 (Volcengine) / 豆包（方舟平台）Deepseek 配置 #
+# 火山引擎 (Volcengine) / 豆包（方舟平台）配置
 # ====================================================================================================
+# 模型使用说明（modelId -> 适合的工作 / 能力特点）
+# - doubao-pro-32k：中文长文本分析/总结/创作；更稳、更适合长上下文
+# - deepseek-r1-math：数学/推导/证明；强推理，适合严谨步骤
+# - deepseek-r1-code：代码阅读/定位 bug/重构建议；强推理，适合复杂工程问题
+# - deepseek-r1-logic：逻辑推理/论证；适合拆解复杂问题并给出严谨结论
+# - deepseek-v3-general：通用对话/日常问答；速度与质量均衡
+# - deepseek-v3-writer：中文写作/润色/扩写；更偏表达与文风
+# - deepseek-v3-agent：任务拆解/多步执行/工具协作；更偏“做事”的对话
+# - doubao-seedream-artist：文生图/图生图/艺术创作；多模态（图像）
+# - doubao-seedream-designer：界面/海报/视觉设计；多模态（图像）
+# - gpt-4o：高质量多模态通用；适合复杂场景与视觉输入
+# - gpt-4o-mini：更快更省的通用；适合高频问答与轻量任务
+#
 # 火山方舟 API 密钥：本项目通过 baseURL + apiKey 进行对接
 VOLCENGINE_API_KEY=****************
 
@@ -16,12 +29,15 @@ VOLCENGINE_EMBEDDING_MODEL=ep-20260106001810-*****
 VOLCENGINE_MODEL_DOUBAO_PRO=ep-20260109003610-*****
 
 # DeepSeek R1 - 超强推理模型，擅长数学、代码、逻辑推理
+# 注意：deepseek-r1-math / deepseek-r1-code / deepseek-r1-logic 会共享这个 endpoint
 VOLCENGINE_MODEL_DEEPSEEK_R1=ep-20260110052019-*****
 
 # DeepSeek V3 - 通用平衡模型，适合日常问答和 Agent 任务
+# 注意：deepseek-v3-general / deepseek-v3-writer / deepseek-v3-agent 会共享这个 endpoint
 VOLCENGINE_MODEL_DEEPSEEK_V3=ep-20260110052213-*****
 
 # Doubao Seedream 4.5 - 图像生成多模态模型，支持文生图、图生图、组图输出
+# 注意：doubao-seedream-artist / doubao-seedream-designer 会共享这个 endpoint
 VOLCENGINE_MODEL_DOUBAO_SEEDREAM=ep-20260110052347-*****
 
 # ====================================================================================================
@@ -30,7 +46,7 @@ OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx
 
 
 # ====================================================================================================
-# 后端服务（Cloudflare Workers）运行配置：监听端口（默认 3300
+# 后端服务（Cloudflare Workers）运行配置：监听端口（默认 3300）
 BACKEND_PORT=3300
 
 DATABASE_URL=file:./mastra.db

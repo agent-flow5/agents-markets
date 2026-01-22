@@ -18,7 +18,7 @@ export type MarketApiClientOptions = {
    * 默认值：`https://market-api.singulay.online/api`
    *
    * 例：
-   * - 本地：`http://localhost:3000/api`
+   * - 本地：`http://localhost:3300/api`
    * - 线上：`https://market-api.singulay.online/api`
    */
   apiBaseUrl?: string;
@@ -55,7 +55,7 @@ export type ErrorResponseBody = { error: string };
  *
  * 说明：
  * - 当前后端实现里 `id === modelId`（agent 列表由模型列表映射而来）
- * - 调用 /chat 时传 `agentId` 会优先采用该条目对应的 systemPrompt/temperature/modelId
+ * - 调用 /chat 时传 `modelId` 会使用该条目对应的默认 systemPrompt/temperature（可被请求体覆盖）
  */
 export type AgentListItem = {
   id: string;
@@ -112,10 +112,8 @@ export type HealthcheckResponseBody =
  * POST /chat 的请求体（与后端实现对齐）。
  *
  * 字段优先级（后端实际逻辑）：
- * - agentId 存在：使用 agent 的 modelId/systemPrompt/temperature，且 systemPrompt/temperature 可被请求体覆盖
- * - agentId 不存在：
- *   - modelId 不存在：默认使用后端内置列表的第一个 agent（AGENT_LIST[0]）
- *   - modelId 存在：直接使用该 modelId
+ * - modelId 不存在：默认使用后端内置列表的第一个 agent（AGENT_LIST[0]）
+ * - modelId 存在：使用该 modelId，并尝试用 agent 列表匹配默认 systemPrompt/temperature
  *
  * 注意：
  * - `messages` 仅会被后端校验“是数组”，但随后会被 AI SDK 解析，因此请传入符合 UIMessage 协议的数据结构。
@@ -123,7 +121,6 @@ export type HealthcheckResponseBody =
  */
 export type ChatRequestBody = {
   messages: UIMessage[];
-  agentId?: string;
   modelId?: string;
   systemPrompt?: string;
   temperature?: number;
@@ -231,7 +228,7 @@ export function createMarketApiClient(options: MarketApiClientOptions = {}) {
      */
     healthcheck: () => get<HealthcheckResponseBody>("/healthcheck"),
     /**
-     * GET /agents：获取后端内置 agent 列表（用于选择 agentId）。
+     * GET /agents：获取后端内置 agent 列表（用于选择 modelId）。
      */
     agents: () => get<AgentListResponseBody>("/agents"),
     /**

@@ -55,7 +55,7 @@ describe('App', () => {
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
     expect(mockSendMessage).toHaveBeenCalledWith(
       { text: 'hello' },
-      { body: { agentId: 'doubao-lite' } },
+      { body: { modelId: 'doubao-lite', systemPrompt: 'S', temperature: 0.3 } },
     )
     expect((input as HTMLInputElement).value).toBe('')
   })

@@ -11,15 +11,25 @@ type MockedRegistry = {
   getModel: jest.Mock
 }
 
+type AgentConfig = {
+  id: string
+  name: string
+  modelId: string
+  systemPrompt: string
+  temperature: number
+}
+
+type CreateAgentInput = {
+  name: string
+  modelId: string
+  systemPrompt: string
+  temperature?: number
+}
+
 type MockedAgents = {
-  getAgentById: jest.Mock
-  AGENT_LIST: Array<{
-    id: string
-    name: string
-    modelId: string
-    systemPrompt: string
-    temperature: number
-  }>
+  listAgents: () => AgentConfig[]
+  createAgent: (input: CreateAgentInput) => AgentConfig
+  AGENT_LIST: AgentConfig[]
 }
 
 function makeUiStreamResponse(): Response {
@@ -52,18 +62,24 @@ async function setupWorker(overrides?: {
     ...overrides?.registry,
   }
 
+  const defaultAgentList = overrides?.agents?.AGENT_LIST ?? [
+    {
+      id: 'code-assistant',
+      name: '代码助手',
+      modelId: 'gpt-4o',
+      systemPrompt: 'S',
+      temperature: 0.2,
+    },
+  ]
+
   const agents: MockedAgents = {
-    getAgentById: jest.fn(() => undefined),
-    AGENT_LIST: [
-      {
-        id: 'code-assistant',
-        name: '代码助手',
-        modelId: 'gpt-4o',
-        systemPrompt: 'S',
-        temperature: 0.2,
-      },
-    ],
-    ...overrides?.agents,
+    AGENT_LIST: defaultAgentList,
+    listAgents: overrides?.agents?.listAgents ?? jest.fn(() => defaultAgentList),
+    createAgent:
+      overrides?.agents?.createAgent ??
+      jest.fn(() => {
+        throw new Error('Not implemented')
+      }),
   }
 
   jest.resetModules()
@@ -80,7 +96,8 @@ async function setupWorker(overrides?: {
   }))
 
   jest.unstable_mockModule('./data/agents', () => ({
-    getAgentById: agents.getAgentById,
+    listAgents: agents.listAgents,
+    createAgent: agents.createAgent,
     AGENT_LIST: agents.AGENT_LIST,
   }))
 
@@ -113,6 +130,7 @@ describe('workers backend', () => {
     expect(Array.isArray(body.items)).toBe(true)
     expect(body.items.length).toBeGreaterThan(0)
     expect(body.items.some((i) => i.modelId === 'gpt-4o')).toBe(true)
+    expect(new Set(body.items.map((i) => i.id)).size).toBe(body.items.length)
   })
 
   test('GET /api/agents returns agents list', async () => {
@@ -123,6 +141,7 @@ describe('workers backend', () => {
       items: Array<{ id: string; modelId: string; name: string; systemPrompt: string; temperature: number }>
     }
     expect(body.items.some((i) => i.modelId === 'gpt-4o')).toBe(true)
+    expect(new Set(body.items.map((i) => i.id)).size).toBe(body.items.length)
   })
 
   test('OPTIONS returns 204 and CORS headers', async () => {
@@ -145,7 +164,7 @@ describe('workers backend', () => {
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body，请求体必须是 JSON 格式' })
   })
 
   test('POST /api/chat rejects invalid JSON', async () => {
@@ -157,7 +176,7 @@ describe('workers backend', () => {
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body，请求体必须是 JSON 格式' })
   })
 
   test('POST /chat rejects missing messages array', async () => {
@@ -169,7 +188,7 @@ describe('workers backend', () => {
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Invalid messages' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid messages，messages 必须是数组' })
   })
 
   test('POST /chat rejects empty modelId', async () => {
@@ -184,7 +203,7 @@ describe('workers backend', () => {
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Invalid modelId' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid modelId，modelId 不能为空' })
   })
 
   test('POST /chat streams UI message protocol and applies CORS', async () => {
@@ -207,6 +226,7 @@ describe('workers backend', () => {
         ],
         modelId: 'gpt-4o',
         systemPrompt: 'SYS',
+        temperature: 0.2,
       }),
     })
 
@@ -221,7 +241,7 @@ describe('workers backend', () => {
 
     const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
     expect(streamTextArgs.system).toBe('SYS')
-    expect(streamTextArgs.temperature).toBeUndefined()
+    expect(streamTextArgs.temperature).toBe(0.2)
     expect(registry.getModel).toHaveBeenCalledWith('gpt-4o', expect.objectContaining({ CORS_ORIGIN: 'http://localhost:5173' }))
 
     const convertArgs = ai.convertToModelMessages.mock.calls[0][0] as Array<Record<string, unknown>>
@@ -229,17 +249,47 @@ describe('workers backend', () => {
     expect(convertArgs[0]).not.toHaveProperty('id')
   })
 
-  test('POST /chat uses agent config when agentId provided', async () => {
-    const { worker, ai, registry, agents } = await setupWorker({
-      agents: {
-        getAgentById: jest.fn(() => ({
-          id: 'zh-translator',
-          name: '中文翻译官',
-          modelId: 'doubao-lite',
-          systemPrompt: 'S',
-          temperature: 0.7,
-        })),
+  test('POST /chat rejects missing systemPrompt', async () => {
+    const { worker } = await setupWorker()
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        modelId: 'gpt-4o',
+        temperature: 0.2,
+      }),
+    })
+    const res = await worker.fetch(req, {})
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid systemPrompt，systemPrompt 不能为空' })
+  })
+
+  test('POST /chat defaults temperature to 0.3 when missing', async () => {
+    const { worker, ai, registry } = await setupWorker({
+      registry: {
+        getModel: jest.fn(() => ({})),
       },
+    })
+    const req = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        modelId: 'gpt-4o',
+        systemPrompt: 'SYS',
+      }),
+    })
+    const res = await worker.fetch(req, { OPENAI_API_KEY: 'k' })
+    expect(res.status).toBe(200)
+    expect(registry.getModel).toHaveBeenCalledWith('gpt-4o', expect.any(Object))
+
+    const streamTextArgs = ai.streamText.mock.calls[0][0] as { temperature?: number }
+    expect(streamTextArgs.temperature).toBe(0.3)
+  })
+
+  test('POST /chat defaults modelId to doubao-pro-32k when missing', async () => {
+    const { worker, registry } = await setupWorker({
       registry: {
         getModel: jest.fn(() => ({})),
       },
@@ -250,7 +300,8 @@ describe('workers backend', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
-        agentId: 'zh-translator',
+        systemPrompt: 'SYS',
+        temperature: 0.2,
       }),
     })
 
@@ -259,66 +310,103 @@ describe('workers backend', () => {
       VOLCENGINE_API_KEY: 'k',
     })
     expect(res.status).toBe(200)
-    expect(agents.getAgentById).toHaveBeenCalledWith('zh-translator')
-    expect(registry.getModel).toHaveBeenCalledWith('doubao-lite', expect.objectContaining({ VOLCENGINE_API_KEY: 'k' }))
-    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
-    expect(streamTextArgs.system).toBe('S')
-    expect(streamTextArgs.temperature).toBe(0.7)
+    expect(registry.getModel).toHaveBeenCalledWith('doubao-pro-32k', expect.any(Object))
   })
 
-  test('POST /chat defaults to AGENT_LIST[0] when no agentId/modelId', async () => {
-    const { worker, ai, registry } = await setupWorker({
-      agents: {
-        AGENT_LIST: [
-          {
-            id: 'code-assistant',
-            name: '代码助手',
-            modelId: 'gpt-4o',
-            systemPrompt: 'SYS0',
-            temperature: 0.1,
-          },
-        ],
+  test('GET /models returns model list', async () => {
+    const { worker } = await setupWorker()
+    const res = await worker.fetch(new Request('http://localhost/models'), {})
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { items: Array<{ modelId: string; displayName: string }> }
+    expect(Array.isArray(body.items)).toBe(true)
+    expect(body.items.some((m) => m.modelId === 'gpt-4o')).toBe(true)
+  })
+
+  test('POST /agents creates agent', async () => {
+    const dynamicAgents = [
+      {
+        id: 'code-assistant',
+        name: '代码助手',
+        modelId: 'gpt-4o',
+        systemPrompt: 'S',
+        temperature: 0.2,
       },
-      registry: {
-        getModel: jest.fn(() => ({})),
+    ]
+
+    const { worker } = await setupWorker({
+      agents: {
+        AGENT_LIST: dynamicAgents,
+        listAgents: jest.fn(() => dynamicAgents),
+        createAgent: jest.fn((input: CreateAgentInput) => {
+          const { name, modelId, systemPrompt, temperature } = input
+          const created = {
+            id: 'a1',
+            name,
+            modelId,
+            systemPrompt,
+            temperature: temperature ?? 0.7,
+          }
+          dynamicAgents.unshift(created)
+          return created
+        }),
       },
     })
 
-    const req = new Request('http://localhost/chat', {
+    const req = new Request('http://localhost/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        name: '自定义助手',
+        modelId: 'gpt-4o',
+        systemPrompt: 'SYS',
+        temperature: 0.5,
       }),
     })
 
-    const res = await worker.fetch(req, {
-      OPENAI_API_KEY: 'k',
-    })
-    expect(res.status).toBe(200)
-    expect(registry.getModel).toHaveBeenCalledWith('gpt-4o', expect.objectContaining({ OPENAI_API_KEY: 'k' }))
-    const streamTextArgs = ai.streamText.mock.calls[0][0] as { system?: string; temperature?: number }
-    expect(streamTextArgs.system).toBe('SYS0')
-    expect(streamTextArgs.temperature).toBe(0.1)
+    const res = await worker.fetch(req, {})
+    expect(res.status).toBe(201)
+    const created = (await res.json()) as { id: string; name: string }
+    expect(created.id).toBe('a1')
+    expect(created.name).toBe('自定义助手')
+
+    const listRes = await worker.fetch(new Request('http://localhost/agents'), {})
+    expect(listRes.status).toBe(200)
+    const listBody = (await listRes.json()) as { items: Array<{ id: string }> }
+    expect(listBody.items.some((a) => a.id === 'a1')).toBe(true)
   })
 
-  test('POST /chat rejects unknown agentId', async () => {
+  test('POST /agents rejects invalid JSON body', async () => {
+    const { worker } = await setupWorker()
+    const req = new Request('http://localhost/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+    })
+    const res = await worker.fetch(req, {})
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid JSON body，请求体必须是 JSON 格式' })
+  })
+
+  test('POST /agents rejects invalid fields', async () => {
     const { worker } = await setupWorker({
       agents: {
-        getAgentById: jest.fn(() => undefined),
+        createAgent: jest.fn(() => {
+          throw new Error('Invalid name')
+        }),
       },
     })
-    const req = new Request('http://localhost/chat', {
+    const req = new Request('http://localhost/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
-        agentId: 'missing-agent',
+        name: '',
+        modelId: 'gpt-4o',
+        systemPrompt: 'S',
       }),
     })
     const res = await worker.fetch(req, {})
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Unknown agentId: missing-agent' })
+    await expect(res.json()).resolves.toEqual({ error: 'Invalid name' })
   })
 
   test('POST /chat rejects unknown modelId', async () => {
@@ -335,6 +423,8 @@ describe('workers backend', () => {
       body: JSON.stringify({
         messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
         modelId: 'nope',
+        systemPrompt: 'SYS',
+        temperature: 0.2,
       }),
     })
     const res = await worker.fetch(req, {
@@ -354,17 +444,22 @@ describe('workers backend', () => {
           throw new Error('boom')
         }),
       },
+      registry: {
+        getModel: jest.fn(() => ({})),
+      },
     })
     const req = new Request('http://localhost/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [{ id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+        modelId: 'gpt-4o',
+        systemPrompt: 'SYS',
+        temperature: 0.2,
       }),
     })
     const res = await worker.fetch(req, {
-      VOLCENGINE_BASE_URL: 'http://example.com',
-      VOLCENGINE_API_KEY: 'k',
+      OPENAI_API_KEY: 'k',
     })
     expect(res.status).toBe(500)
     await expect(res.json()).resolves.toEqual({ error: 'boom' })

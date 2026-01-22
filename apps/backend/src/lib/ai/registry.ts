@@ -28,7 +28,10 @@ export function getModel(modelId: string, env: RegistryEnv) {
   const { openai, volcengine } = getProviders(env)
 
   if (modelItem.provider === 'openai') {
-    return openai().chat(modelItem.model)
+    if (!modelItem.model) {
+      throw new Error(`Model ${modelId} is missing openai.model in MODEL_LIST`)
+    }
+    return openai().chat(modelItem.model as any)
   }
 
   const endpointIdEnv = modelItem.volcengine?.endpointIdEnv
