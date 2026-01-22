@@ -366,6 +366,9 @@ function App() {
                       onChange={(e) => setCreateTemperature(Number(e.target.value))}
                       className="w-full"
                     />
+                    <p className="mt-1 text-sm text-gray-500">
+                      控制回答的随机性。0 = 更确定，2 = 更随机创造
+                    </p>
                   </div>
                 </div>
 
